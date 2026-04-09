@@ -2,83 +2,113 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visual Citation Graph</title>
+    <title>Deep Citation Explorer (Depth 3)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
     <style>
-        body { font-family: system-ui, sans-serif; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
-        #controls { padding: 15px; background: #f4f4f9; border-bottom: 1px solid #ddd; z-index: 10; display: flex; gap: 10px; }
-        input { flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-        button { padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        #cy { flex-grow: 1; width: 100%; background: #fff; }
-        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-weight: bold; color: #555; }
+        body { font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #1a1a1a; color: white; }
+        #controls { padding: 15px; background: #2d2d2d; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #444; }
+        input { flex-grow: 1; padding: 10px; border: none; border-radius: 4px; background: #3d3d3d; color: white; }
+        button { padding: 10px 20px; background: #00d1b2; color: black; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        #cy { flex-grow: 1; width: 100%; }
+        #status { font-size: 12px; color: #aaa; margin-right: 10px; }
+        .loading-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 100; display: none; text-align: center; }
     </style>
 </head>
 <body>
 
 <div id="controls">
-    <input type="text" id="paperQuery" placeholder="הכנס שם של מאמר (למשל: Attention is all you need)...">
-    <button onclick="buildGraph()">צור גרף ציטוטים</button>
+    <input type="text" id="paperQuery" placeholder="הכנס שם מאמר או DOI...">
+    <div id="status"></div>
+    <button onclick="startDeepBuild()">סרוק עומק 3</button>
 </div>
 
-<div class="loading" id="loader">טוען נתונים מ-OpenAlex...</div>
+<div class="loading-overlay" id="loader">
+    <h2>סורק קשרים...</h2>
+    <p id="progressText">מכין בקשות API</p>
+</div>
+
 <div id="cy"></div>
 
 <script>
     let cy;
+    const MAX_NODES = 200; // הגנה מקריסת דפדפן
+    const processedIds = new Set();
+    const elements = [];
 
-    async function buildGraph() {
-        const query = document.getElementById('paperQuery').value;
-        if (!query) return alert("אנא הכנס שם מאמר");
+    async function fetchPaperData(idOrQuery, isId = false) {
+        const url = isId ? `https://api.openalex.org/works/${idOrQuery}` : `https://api.openalex.org/works?search=${encodeURIComponent(idOrQuery)}&per_page=1`;
+        const res = await fetch(url, {
+            headers: { 'User-Agent': 'ResearchGraphApp/1.0 (mailto:your-email@huji.ac.il)' }
+        });
+        const data = await res.json();
+        return isId ? data : data.results[0];
+    }
 
-        document.getElementById('loader').style.display = 'block';
+    async function crawl(paperId, depth) {
+        if (depth === 0 || processedIds.size >= MAX_NODES || processedIds.has(paperId)) return;
+        
+        processedIds.add(paperId);
+        updateStatus(`סורק: ${processedIds.size} מאמרים נמצאו...`);
 
         try {
-            // 1. חיפוש המאמר הראשוני
-            const searchRes = await fetch(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per_page=1`);
-            const searchData = await searchRes.json();
-            
-            if (searchData.results.length === 0) throw new Error("לא נמצא מאמר");
-            const seedPaper = searchData.results[0];
+            const paper = await fetchPaperData(paperId, true);
+            if (!paper) return;
 
-            // 2. הכנת נתוני הגרף (Nodes & Edges)
-            const elements = [];
-
-            // הוספת הצומת הראשי
-            elements.push({
-                data: { id: seedPaper.id, label: seedPaper.title, weight: 10 }
-            });
-
-            // 3. שליפת פרטים על הציטוטים (רק ה-15 הראשונים כדי לא להעמיס)
-            const refs = seedPaper.referenced_works.slice(0, 15);
-            
-            if (refs.length > 0) {
-                const refsQuery = refs.map(id => id.split('/').pop()).join('|');
-                const refsRes = await fetch(`https://api.openalex.org/works?filter=openalex:${refsQuery}`);
-                const refsData = await refsRes.json();
-
-                refsData.results.forEach(ref => {
-                    elements.push({
-                        data: { id: ref.id, label: ref.title, weight: 5 }
-                    });
-                    elements.push({
-                        data: { source: seedPaper.id, target: ref.id }
-                    });
+            // הוספת הצומת אם לא קיים
+            if (!elements.some(e => e.data.id === paper.id)) {
+                elements.push({
+                    data: { 
+                        id: paper.id, 
+                        label: paper.title.substring(0, 30) + '...', 
+                        weight: depth * 10,
+                        color: depth === 3 ? '#ff3860' : (depth === 2 ? '#ffdd57' : '#23d160')
+                    }
                 });
             }
 
-            // 4. רינדור הגרף
-            initCytoscape(elements);
-
-        } catch (err) {
-            alert("שגיאה: " + err.message);
-        } finally {
-            document.getElementById('loader').style.display = 'none';
+            const refs = paper.referenced_works.slice(0, 10); // הגבלה קלה בכל ענף למניעת פיצוץ קומבינטורי
+            
+            for (const refId of refs) {
+                // הוספת הקשר (Edge)
+                elements.push({ data: { source: paper.id, target: refId } });
+                
+                // המשך סריקה רקורסיבית
+                await crawl(refId, depth - 1);
+            }
+        } catch (e) {
+            console.error("Error crawling ID:", paperId, e);
         }
     }
 
-    function initCytoscape(elements) {
+    async function startDeepBuild() {
+        const query = document.getElementById('paperQuery').value;
+        if (!query) return;
+
+        // איפוס
+        processedIds.clear();
+        elements.length = 0;
+        document.getElementById('loader').style.display = 'block';
+
+        const seed = await fetchPaperData(query, false);
+        if (!seed) {
+            alert("לא נמצא מאמר");
+            return;
+        }
+
+        // התחלת הסריקה מעומק 3
+        await crawl(seed.id, 3);
+
+        initCytoscape();
+        document.getElementById('loader').style.display = 'none';
+        updateStatus(`הסריקה הושלמה: ${processedIds.size} צמתים.`);
+    }
+
+    function updateStatus(msg) {
+        document.getElementById('progressText').innerText = msg;
+        document.getElementById('status').innerText = msg;
+    }
+
+    function initCytoscape() {
         cy = cytoscape({
             container: document.getElementById('cy'),
             elements: elements,
@@ -87,34 +117,34 @@
                     selector: 'node',
                     style: {
                         'label': 'data(label)',
-                        'width': 'mapData(weight, 5, 10, 20, 50)',
-                        'height': 'mapData(weight, 5, 10, 20, 50)',
-                        'background-color': '#007bff',
-                        'color': '#333',
-                        'font-size': '10px',
+                        'width': 'data(weight)',
+                        'height': 'data(weight)',
+                        'background-color': 'data(color)',
+                        'color': '#fff',
+                        'font-size': '8px',
                         'text-wrap': 'wrap',
-                        'text-max-width': '100px',
-                        'text-valign': 'bottom'
+                        'text-max-width': '80px'
                     }
                 },
                 {
                     selector: 'edge',
                     style: {
-                        'width': 2,
-                        'line-color': '#adb5bd',
-                        'target-arrow-color': '#adb5bd',
+                        'width': 1,
+                        'line-color': '#555',
+                        'target-arrow-color': '#555',
                         'target-arrow-shape': 'triangle',
-                        'curve-style': 'bezier'
+                        'curve-style': 'haystack' // ביצועים טובים יותר לגרפים גדולים
                     }
                 }
             ],
             layout: {
-                name: 'cose', // פריסה פיזיקלית (Force-directed)
+                name: 'cose',
+                nodeRepulsion: 8000,
+                idealEdgeLength: 100,
                 animate: true
             }
         });
     }
 </script>
-
 </body>
 </html>
