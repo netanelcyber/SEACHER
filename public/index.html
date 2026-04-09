@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Citation Graph</title>
+</head>
+<body>
+  <h1>Citation Search</h1>
+  <input id="search" placeholder="Search papers..." />
+  <button onclick="search()">Search</button>
+
+  <pre id="output"></pre>
+
+  <script>
+    async function search() {
+      const q = document.getElementById("search").value;
+      const res = await fetch(`/.netlify/functions/searchPapers?q=${q}`);
+      const data = await res.json();
+      document.getElementById("output").innerText = JSON.stringify(data, null, 2);
+    }
+  </script>
+</body>
+</html>

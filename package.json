@@ -1,0 +1,7 @@
+{
+  "name": "citation-graph-netlify",
+  "version": "1.0.0",
+  "dependencies": {
+    "neo4j-driver": "^5.0.0"
+  }
+}
