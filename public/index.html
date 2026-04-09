@@ -1,22 +1,120 @@
 <!DOCTYPE html>
-<html>
+<html lang="he" dir="rtl">
 <head>
-  <title>Citation Graph</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Citation Graph</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        #controls { padding: 15px; background: #f4f4f9; border-bottom: 1px solid #ddd; z-index: 10; display: flex; gap: 10px; }
+        input { flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #cy { flex-grow: 1; width: 100%; background: #fff; }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-weight: bold; color: #555; }
+    </style>
 </head>
 <body>
-  <h1>Citation Search</h1>
-  <input id="search" placeholder="Search papers..." />
-  <button onclick="search()">Search</button>
 
-  <pre id="output"></pre>
+<div id="controls">
+    <input type="text" id="paperQuery" placeholder="הכנס שם של מאמר (למשל: Attention is all you need)...">
+    <button onclick="buildGraph()">צור גרף ציטוטים</button>
+</div>
 
-  <script>
-    async function search() {
-      const q = document.getElementById("search").value;
-      const res = await fetch(`/.netlify/functions/searchPapers?q=${q}`);
-      const data = await res.json();
-      document.getElementById("output").innerText = JSON.stringify(data, null, 2);
+<div class="loading" id="loader">טוען נתונים מ-OpenAlex...</div>
+<div id="cy"></div>
+
+<script>
+    let cy;
+
+    async function buildGraph() {
+        const query = document.getElementById('paperQuery').value;
+        if (!query) return alert("אנא הכנס שם מאמר");
+
+        document.getElementById('loader').style.display = 'block';
+
+        try {
+            // 1. חיפוש המאמר הראשוני
+            const searchRes = await fetch(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per_page=1`);
+            const searchData = await searchRes.json();
+            
+            if (searchData.results.length === 0) throw new Error("לא נמצא מאמר");
+            const seedPaper = searchData.results[0];
+
+            // 2. הכנת נתוני הגרף (Nodes & Edges)
+            const elements = [];
+
+            // הוספת הצומת הראשי
+            elements.push({
+                data: { id: seedPaper.id, label: seedPaper.title, weight: 10 }
+            });
+
+            // 3. שליפת פרטים על הציטוטים (רק ה-15 הראשונים כדי לא להעמיס)
+            const refs = seedPaper.referenced_works.slice(0, 15);
+            
+            if (refs.length > 0) {
+                const refsQuery = refs.map(id => id.split('/').pop()).join('|');
+                const refsRes = await fetch(`https://api.openalex.org/works?filter=openalex:${refsQuery}`);
+                const refsData = await refsRes.json();
+
+                refsData.results.forEach(ref => {
+                    elements.push({
+                        data: { id: ref.id, label: ref.title, weight: 5 }
+                    });
+                    elements.push({
+                        data: { source: seedPaper.id, target: ref.id }
+                    });
+                });
+            }
+
+            // 4. רינדור הגרף
+            initCytoscape(elements);
+
+        } catch (err) {
+            alert("שגיאה: " + err.message);
+        } finally {
+            document.getElementById('loader').style.display = 'none';
+        }
     }
-  </script>
+
+    function initCytoscape(elements) {
+        cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements: elements,
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'label': 'data(label)',
+                        'width': 'mapData(weight, 5, 10, 20, 50)',
+                        'height': 'mapData(weight, 5, 10, 20, 50)',
+                        'background-color': '#007bff',
+                        'color': '#333',
+                        'font-size': '10px',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '100px',
+                        'text-valign': 'bottom'
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 2,
+                        'line-color': '#adb5bd',
+                        'target-arrow-color': '#adb5bd',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier'
+                    }
+                }
+            ],
+            layout: {
+                name: 'cose', // פריסה פיזיקלית (Force-directed)
+                animate: true
+            }
+        });
+    }
+</script>
+
 </body>
 </html>
